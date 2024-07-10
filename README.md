@@ -4,8 +4,8 @@
 ## Steps
 
 **To test pipeiline**
-- [ ] 1. Directory Template Setup
-- [ ] 2. Test the training pipeline for tiny samples
+- [x] 1. Directory Template Setup
+- [x] 2. Test the training pipeline for tiny samples
 - [ ] 3. Test the inference pipeline for tiny samples
 - [ ] 4. Make a submission
 
