@@ -1,74 +1,50 @@
+from pytorch_lightning import LightningModule, LightningDataModule
+from torchmetrics.classification import MultilabelAUROC
+from torchmetrics import MetricCollection, MeanMetric
+from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim import AdamW
+from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
+import torch.nn as nn
+import torch
+import random
 import numpy as np
 import pandas as pd
-import librosa
 import warnings
+import os
+from PIL import Image
+
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
-warnings.simplefilter(action='ignore', category=pd.errors.SettingWithCopyWarning)
-import random
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torchmetrics import MetricCollection, MeanMetric
-from torchmetrics.classification import MultilabelAUROC
-
-from pytorch_lightning import LightningModule, LightningDataModule
+warnings.simplefilter(
+    action='ignore', category=pd.errors.SettingWithCopyWarning)
 
 
-class BirdDataset(Dataset):
+class ISICDatast(Dataset):
     def __init__(self,
                  df,
+                 img_dir,
                  transform=None,
-                 segm_sec=None,
                  **kwargs):
         df = df.reset_index(drop=True)
-        df.loc[:, 'npy_idx'] = df.index.tolist()
-        if segm_sec is None:
-            self.objidx2npyidx = df.groupby(['mel_path'], as_index=False)['npy_idx'].aggregate(lambda x: x.tolist())
-        else:
-            df['offset_segm'] = df['offset_seconds'].astype(int) // segm_sec
-            self.objidx2npyidx = df.groupby(['mel_path', 'offset_segm'], as_index=False)['npy_idx'].aggregate(lambda x: x.tolist())
-        self.npy_data = np.ascontiguousarray(np.array(df['npy_data'].values.tolist()))
         self.transform = transform
-        self.pps = 32_000 // 500
-        self.duration = 10
+        self.df = df
+        self.img_dir = img_dir
 
     def __len__(self):
-        return len(self.objidx2npyidx)
+        return len(self.df)
 
     def __getitem__(self, idx):
-        obj = self.objidx2npyidx.iloc[idx]
-        rand_idx = np.random.choice(obj.npy_idx)
-        offset = self.npy_data[rand_idx][0]
-        x = self._read_spec(path=obj.mel_path, offset=offset)
-        y = self.npy_data[rand_idx:rand_idx+2, 1:].mean(axis=0)
-        return x, y
-
-    def _cyclic_fill(self, x):
-        if (x.shape[1] / self.pps) < self.duration:
-            x = np.hstack([x for _ in range(int(self.duration / (x.shape[1] / self.pps)) + 1)])
-            x = x[:, :self.pps*self.duration]
-        return x
-
-    def _read_spec(self, path, offset):
-        x = np.load(path)
-        start = int(offset * self.pps)
-        end = start + self.duration * self.pps
-        x = x[:, start:end]
-        x = self._cyclic_fill(x)
-        x = librosa.power_to_db(x, ref=1, top_db=100.0).astype('float32')
-        x = x[np.newaxis, ...]
+        img_id = self.df.loc[idx, 'isic_id']
+        img_path = os.path.join(self.img_dir, img_id + '.jpg')
+        img = Image.open(img_path).convert('RGB')
+        label = self.df.loc[idx, 'target'] # 0 or 1
+        label = torch.tensor([label, 1-label], dtype=torch.float32)
         if self.transform:
-            x = x.transpose((1, 2, 0))
-            x = self.transform(image=x)['image']
-            x = x.transpose((2, 0, 1))
-        return x
+            img = self.transform(image=np.array(img))['image']
+        return img, label
 
 
-class BirdDataModule(LightningDataModule):
+class ISICDataModule(LightningDataModule):
     def __init__(self, train_dataset, val_dataset, batch_size=64):
         super().__init__()
         self.batch_size = batch_size
@@ -81,7 +57,7 @@ class BirdDataModule(LightningDataModule):
                           num_workers=4,
                           pin_memory=False,
                           shuffle=True,
-                        )
+                          )
 
     def val_dataloader(self):
         return DataLoader(dataset=self.val_dataset,
@@ -89,7 +65,7 @@ class BirdDataModule(LightningDataModule):
                           num_workers=4,
                           pin_memory=False,
                           shuffle=False,
-                        )
+                          )
 
 
 class CutMix:
@@ -117,7 +93,7 @@ class CutMix:
         labels = labels*alphas[0]
         for i in range(1, self.cuts_num):
             labels += labels_tomix[i-1]*(alphas[i] - alphas[i-1])
-        labels +=  labels_tomix[-1] * (1 - alphas[-1])
+        labels += labels_tomix[-1] * (1 - alphas[-1])
 
         return imgs, labels
 
@@ -142,23 +118,26 @@ class LitCls(LightningModule):
 
         self.model: torch.nn.Module = model
         self.learning_rate: float = learning_rate
-        self.aug_cutmix = CutMix(mode='horizontal', p=cutmix_p, cuts_num=cuts_num)
+        self.aug_cutmix = CutMix(
+            mode='horizontal', p=cutmix_p, cuts_num=cuts_num)
 
         self.loss: torch.nn.Module = nn.CrossEntropyLoss()
         metric_ce = MetricCollection({
             "CE": MeanMetric()
         })
         metric_auroc = MetricCollection({
-            "AUROC": MultilabelAUROC(num_labels=182, average="macro"),
+            "AUROC": MultilabelAUROC(num_labels=2, average="macro"),
         })
 
         self.train_ce: MetricCollection = metric_ce.clone(prefix="train_")
         self.val_ce: MetricCollection = metric_ce.clone(prefix="val_")
-        self.train_auroc: MetricCollection = metric_auroc.clone(prefix="train_")
+        self.train_auroc: MetricCollection = metric_auroc.clone(
+            prefix="train_")
         self.val_auroc: MetricCollection = metric_auroc.clone(prefix="val_")
 
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         x, y = batch
+        x = x.transpose(1, 3) # (B, H, W, C) -> (B, C, H, W)
         x, y = self.aug_cutmix(x, y)
         preds = self.model(x)
         train_loss = self.loss(preds, y)
@@ -175,6 +154,7 @@ class LitCls(LightningModule):
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
+        x = x.transpose(1, 3) # (B, H, W, C) -> (B, C, H, W)
         preds = self.model(x)
         val_loss = self.loss(preds, y)
         self.val_ce(val_loss)
@@ -187,7 +167,7 @@ class LitCls(LightningModule):
         self.val_auroc.reset()
 
     def configure_optimizers(self):
-        optimizer = AdamW(params=self.trainer.model.parameters(), lr=self.learning_rate)
+        optimizer = AdamW(
+            params=self.trainer.model.parameters(), lr=self.learning_rate)
         scheduler = CosineAnnealingLR(optimizer, T_max=self.trainer.max_epochs)
         return [optimizer], [scheduler]
-
