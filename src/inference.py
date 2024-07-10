@@ -9,7 +9,9 @@ import librosa
 import torch
 import timm
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 from PIL import Image
+import albumentations as A
 
 
 def torch_to_ov(model, input_shape=[48, 1, 128, 0]):
@@ -30,8 +32,38 @@ test_image_files = 'tmp/test-images/'
 test_metadat_path = 'data/test-metadata.csv'
 train_metadata_path = 'data/train-metadata.csv'
 submission_path = 'tmp/submission.csv'
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-SHAPE = [48, 1, 128, 320*2]
+# create train and validation datasets
+transform = A.Compose([
+    A.Resize(224, 224),
+    A.Normalize(),
+])
+
+
+class ISICTestDatast(Dataset):
+    def __init__(self,
+                 df,
+                 img_dir,
+                 transform=None,
+                 **kwargs):
+        df = df.reset_index(drop=True)
+        self.transform = transform
+        self.df = df
+        self.img_dir = img_dir
+
+    def __len__(self):
+        return len(self.df)
+
+    def __getitem__(self, idx):
+        img_id = self.df.loc[idx, 'isic_id']
+        img_path = os.path.join(self.img_dir, img_id + '.png')
+        img = Image.open(img_path).convert('RGB')
+        if self.transform:
+            img = self.transform(image=np.array(img))['image']
+        label = torch.tensor([0, 1], dtype=torch.float32)
+        return torch.tensor(img).permute(2, 0, 1), label, img_id
+
 
 # load and compile models
 models = []
@@ -50,6 +82,7 @@ for i, model_path in enumerate(model_paths):
             new_state_dict[key[6:]] = val
     model.load_state_dict(new_state_dict)
     model.eval()
+    model.to(device)
     # model = torch_to_ov(model, input_shape=SHAPE)
     models.append(model)
 print(f'{len(models)} models are ready')
@@ -59,6 +92,15 @@ test_df = pd.read_csv(test_metadat_path)
 test_df['img_path'] = test_df['isic_id'].apply(
     lambda x: os.path.join(test_image_files, f'{x}.png'))
 
+# define data loader
+test_dataset = ISICTestDatast(test_df, test_image_files, transform=transform)
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=32,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=True
+)
 
 def process(idx):
     row = test_df.iloc[idx]
@@ -69,23 +111,31 @@ def process(idx):
     return row['isic_id'], img_arr
 
 
-indexes = test_df.index
-output = joblib.Parallel(n_jobs=-1, backend="loky")(
-    joblib.delayed(process)(idx) for idx in indexes
-)
-filenames, image_array = zip(*output)
+#indexes = test_df.index
+#output = joblib.Parallel(n_jobs=-1, backend="loky")(
+#    joblib.delayed(process)(idx) for idx in indexes
+#)
+#filenames, image_array = zip(*output)
 
 # make predictions
 ids = []
 preds = [np.empty(shape=(0, 2), dtype='float32') for _ in range(len(models))]
-with torch.no_grad():
-    for filename, img in zip(filenames, image_array):
-        image = torch.Tensor(img).unsqueeze(0)
-        for m_idx in range(len(models)):
-            rec_preds = models[m_idx](image).numpy()
-            preds[m_idx] = np.concatenate([preds[m_idx], rec_preds], axis=0)
-        ids.append(filename)
+#with torch.no_grad():
+#    for filename, img in zip(filenames, image_array):
+#        image = torch.Tensor(img).unsqueeze(0)
+#        for m_idx in range(len(models)):
+#            rec_preds = models[m_idx](image).numpy()
+#            preds[m_idx] = np.concatenate([preds[m_idx], rec_preds], axis=0)
+#        ids.append(filename)
 
+# using dataloader
+with torch.no_grad():
+    for img, label, filename in test_loader:
+        img = img.to(device)
+        for m_idx in range(len(models)):
+            rec_preds = models[m_idx](img).cpu().numpy()
+            preds[m_idx] = np.concatenate([preds[m_idx], rec_preds], axis=0)
+        ids.extend(filename)
 
 # postprocessing and ensembling
 preds = F.sigmoid(torch.Tensor(np.array(preds))).numpy()
@@ -107,3 +157,4 @@ pred_df.to_csv(submission_path, index=False)
 pred_df = pred_df[['isic_id', 1]]
 pred_df.columns = ['isic_id', 'target']
 pred_df.to_csv(submission_path, index=False)
+print(f" top 5 rows of submission file: \n {pred_df.head()}")
