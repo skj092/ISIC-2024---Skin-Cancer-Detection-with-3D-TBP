@@ -166,3 +166,4 @@ cython_debug/
 data/
 model_weights/
 lightning_logs/
+tmp/
