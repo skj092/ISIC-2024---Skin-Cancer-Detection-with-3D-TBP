@@ -3,7 +3,7 @@ import albumentations as A
 import timm
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor, RichProgressBar
 from pytorch_lightning import Trainer
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupKFold
 import pandas as pd
 import json
 import warnings
@@ -37,10 +37,17 @@ if __name__ == '__main__':
         CFG = json.load(f)
 
     # read train metadata
-    data = pd.read_csv(train_csv_path)
+    df_train = pd.read_csv(train_csv_path)
 
-    train_df, valid_df = train_test_split(
-        data, test_size=0.1, random_state=42, stratify=data['target'])
+    gkf = GroupKFold(n_splits=5)  # , shuffle=True, random_state=42
+
+    df_train["fold"] = -1
+    for idx, (train_idx, val_idx) in enumerate(gkf.split(df_train, df_train["target"], groups=df_train["patient_id"])):
+        df_train.loc[val_idx, "fold"] = idx
+
+    # take only one fold
+    train_df = df_train[df_train["fold"] != 0].reset_index(drop=True)
+    valid_df = df_train[df_train["fold"] == 0].reset_index(drop=True)
 
     # create train and validation datasets
     transform = A.Compose([
@@ -59,7 +66,7 @@ if __name__ == '__main__':
     # create pretrained model
     model = timm.create_model(
         CFG['model_name'], pretrained=True,
-        num_classes=2
+        num_classes=1
     )
     lit_cls = LitCls(model, cutmix_p=0.9, learning_rate=CFG['learning_rate'])
 

@@ -13,10 +13,14 @@ import pandas as pd
 import warnings
 import os
 from PIL import Image
+from sklearn.metrics import roc_auc_score
+
 
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 warnings.simplefilter(
     action='ignore', category=pd.errors.SettingWithCopyWarning)
+
+
 
 
 class ISICDatast(Dataset):
@@ -37,8 +41,7 @@ class ISICDatast(Dataset):
         img_id = self.df.loc[idx, 'isic_id']
         img_path = os.path.join(self.img_dir, img_id + '.jpg')
         img = Image.open(img_path).convert('RGB')
-        label = self.df.loc[idx, 'target'] # 0 or 1
-        label = torch.tensor([label, 1-label], dtype=torch.float32)
+        label = self.df.loc[idx, 'target']  # 0 or 1
         if self.transform:
             img = self.transform(image=np.array(img))['image']
         return img, label
@@ -135,12 +138,25 @@ class LitCls(LightningModule):
             prefix="train_")
         self.val_auroc: MetricCollection = metric_auroc.clone(prefix="val_")
 
+    def comp_score(self, solution: np.ndarray, submission: np.ndarray, min_tpr: float = 0.80):
+        v_gt = abs(solution - 1)
+        v_pred = 1.0 - submission
+        max_fpr = abs(1-min_tpr)
+        partial_auc_scaled = roc_auc_score(v_gt, v_pred, max_fpr=max_fpr)
+        partial_auc = 0.5 * max_fpr**2 + \
+            (max_fpr - 0.5 * max_fpr**2) / (1.0 - 0.5) * (partial_auc_scaled - 0.5)
+        return partial_auc
+
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
         x, y = batch
-        x = x.transpose(1, 3) # (B, H, W, C) -> (B, C, H, W)
+        x = x.transpose(1, 3)  # (B, H, W, C) -> (B, C, H, W)
         x, y = self.aug_cutmix(x, y)
-        preds = self.model(x)
-        train_loss = self.loss(preds, y)
+        preds = self.model(x).squeeze()
+        train_loss = self.loss(preds.squeeze(), y)
+        import code; code.interact(local=locals())
+        import sys; sys.exit()
+        comp_score = self.comp_score(y.cpu().numpy(), F.sigmoid(preds).detach().cpu().numpy())
+        print(f"comp_score: {comp_score}")
         self.train_ce(train_loss)
         self.log('train_loss', train_loss, prog_bar=True, sync_dist=True)
         self.train_auroc(F.sigmoid(preds), (y+0.9).int())
@@ -154,9 +170,9 @@ class LitCls(LightningModule):
 
     def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> None:
         x, y = batch
-        x = x.transpose(1, 3) # (B, H, W, C) -> (B, C, H, W)
+        x = x.transpose(1, 3)  # (B, H, W, C) -> (B, C, H, W)
         preds = self.model(x)
-        val_loss = self.loss(preds, y)
+        val_loss = self.loss(preds.squeeze(), y)
         self.val_ce(val_loss)
         self.val_auroc(F.sigmoid(preds), (y+0.9).int())
 

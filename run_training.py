@@ -11,4 +11,5 @@ for name, value in vars(parser.parse_args()).items():
 
 print('======= TRAINING =======')
 os.system(f"python ./src/training.py --cfg {args['cfg_path']}")
+#os.system(f"python ./src/train_lgbm.py")
 

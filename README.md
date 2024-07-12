@@ -10,4 +10,5 @@
 - [x] 4. Make a submission
 
 **Baseline Submission**
-- [ ] 1. Overfit one batch of dataset and validate the initial loss.
+- [ ] 1. Use competition metric to validate the model.
+- [ ] 2. Group k fold validation.
