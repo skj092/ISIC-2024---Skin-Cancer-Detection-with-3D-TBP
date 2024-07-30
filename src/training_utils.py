@@ -42,7 +42,7 @@ class ISICDatast(Dataset):
         label = self.df.loc[idx, 'target']  # 0 or 1
         if self.transform:
             img = self.transform(image=np.array(img))['image']
-        return img, label
+        return torch.tensor(img, dtype=torch.float32), torch.tensor(label, dtype=torch.float32)
 
 
 class ISICDataModule(LightningDataModule):
