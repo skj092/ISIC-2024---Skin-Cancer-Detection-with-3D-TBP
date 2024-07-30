@@ -21,8 +21,6 @@ warnings.simplefilter(
     action='ignore', category=pd.errors.SettingWithCopyWarning)
 
 
-
-
 class ISICDatast(Dataset):
     def __init__(self,
                  df,
@@ -144,7 +142,8 @@ class LitCls(LightningModule):
         max_fpr = abs(1-min_tpr)
         partial_auc_scaled = roc_auc_score(v_gt, v_pred, max_fpr=max_fpr)
         partial_auc = 0.5 * max_fpr**2 + \
-            (max_fpr - 0.5 * max_fpr**2) / (1.0 - 0.5) * (partial_auc_scaled - 0.5)
+            (max_fpr - 0.5 * max_fpr**2) / \
+            (1.0 - 0.5) * (partial_auc_scaled - 0.5)
         return partial_auc
 
     def training_step(self, batch, batch_idx: int) -> torch.Tensor:
@@ -153,13 +152,9 @@ class LitCls(LightningModule):
         x, y = self.aug_cutmix(x, y)
         preds = self.model(x).squeeze()
         train_loss = self.loss(preds.squeeze(), y)
-        import code; code.interact(local=locals())
-        import sys; sys.exit()
-        comp_score = self.comp_score(y.cpu().numpy(), F.sigmoid(preds).detach().cpu().numpy())
-        print(f"comp_score: {comp_score}")
-        self.train_ce(train_loss)
+        #self.train_ce(train_loss)
         self.log('train_loss', train_loss, prog_bar=True, sync_dist=True)
-        self.train_auroc(F.sigmoid(preds), (y+0.9).int())
+        #self.train_auroc(F.sigmoid(preds), (y+0.9).int())
         return train_loss
 
     def on_train_epoch_end(self) -> None:
@@ -173,8 +168,8 @@ class LitCls(LightningModule):
         x = x.transpose(1, 3)  # (B, H, W, C) -> (B, C, H, W)
         preds = self.model(x)
         val_loss = self.loss(preds.squeeze(), y)
-        self.val_ce(val_loss)
-        self.val_auroc(F.sigmoid(preds), (y+0.9).int())
+        #self.val_ce(val_loss)
+        #self.val_auroc(F.sigmoid(preds), (y+0.9).int())
 
     def on_validation_epoch_end(self) -> None:
         self.log_dict(self.val_ce.compute(), prog_bar=True, sync_dist=True)
