@@ -168,3 +168,5 @@ model_weights/
 lightning_logs/
 tmp/
 *.csv
+checkpoints/
+*.bin
