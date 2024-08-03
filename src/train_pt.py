@@ -93,7 +93,17 @@ ROOT_DIR = "./data/"
 HDF_FILE = f"{ROOT_DIR}/train-image.hdf5"
 
 df = pd.read_csv(f"{ROOT_DIR}/train-metadata.csv")
-#df = df.sample(n=100, random_state=CONFIG["seed"]).reset_index(drop=True)
+
+archive = pd.read_csv("tmp/metadata.csv")
+archive.rename(columns={'benign_malignant': 'target'}, inplace=True)
+archive = archive.drop(archive[archive['target'] == 'indeterminate'].index)
+archive = archive.drop(archive[archive['target'] == 'indeterminate/malignant'].index)
+archive = archive.drop(archive[archive['target'] == 'indeterminate/benign'].index)
+class_encoder = LabelEncoder()
+archive['target'] = class_encoder.fit_transform(archive['target'])
+archive = archive.drop(archive[archive['target'] == 2].index)
+df = pd.concat([df, archive], axis=0).reset_index(drop=True)
+
 
 print("        df.shape, # of positive cases, # of patients")
 print("original>", df.shape, df.target.sum(), df["patient_id"].unique().shape)
@@ -107,6 +117,7 @@ print("filtered>", df.shape, df.target.sum(), df["patient_id"].unique().shape)
 
 df = df.reset_index(drop=True)
 print(df.shape[0], df.target.sum())
+import sys; sys.exit()
 
 CONFIG['T_max'] = df.shape[0] * (CONFIG["n_fold"]-1) * \
     CONFIG['epochs'] // CONFIG['train_batch_size'] // CONFIG["n_fold"]
