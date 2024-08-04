@@ -90,7 +90,7 @@ def set_seed(seed=42):
 set_seed(CONFIG['seed'])
 
 ROOT_DIR = "./data/"
-HDF_FILE = f"{ROOT_DIR}/train-image.hdf5"
+HDF_FILE = f"{ROOT_DIR}/combined_file.h5"
 
 df = pd.read_csv(f"{ROOT_DIR}/train-metadata.csv")
 
@@ -103,6 +103,8 @@ class_encoder = LabelEncoder()
 archive['target'] = class_encoder.fit_transform(archive['target'])
 archive = archive.drop(archive[archive['target'] == 2].index)
 df = pd.concat([df, archive], axis=0).reset_index(drop=True)
+df['patient_id'] = df['patient_id'].astype(str)
+df['patient_id'] = df['patient_id'].fillna('unknown')
 
 
 print("        df.shape, # of positive cases, # of patients")
@@ -117,7 +119,6 @@ print("filtered>", df.shape, df.target.sum(), df["patient_id"].unique().shape)
 
 df = df.reset_index(drop=True)
 print(df.shape[0], df.target.sum())
-import sys; sys.exit()
 
 CONFIG['T_max'] = df.shape[0] * (CONFIG["n_fold"]-1) * \
     CONFIG['epochs'] // CONFIG['train_batch_size'] // CONFIG["n_fold"]
